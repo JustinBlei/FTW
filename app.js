@@ -1,6 +1,6 @@
 'use strict';
 
-const VERSION = '1.0';
+const VERSION = '1.1';
 const STORE_KEY = 'wt-data-v1';
 const DAY = 86400000;
 const GROUPS = ['Brust', 'Rücken', 'Beine', 'Schultern', 'Arme', 'Core', 'Sonstige'];
@@ -13,10 +13,10 @@ const DEFAULT_SETTINGS = {
 };
 
 const DEFAULT_EXERCISES = [
-  ['Bankdrücken', 'Brust', 5, 8],
-  ['Schrägbankdrücken (KH)', 'Brust', 8, 12],
-  ['Butterfly', 'Brust', 10, 15],
-  ['Dips', 'Brust', 6, 12],
+  ['Schrägbankdrücken 30°', 'Brust', 6, 10],
+  ['Bankdrücken', 'Brust', 8, 12],
+  ['Kabel-Flys', 'Brust', 10, 15],
+  ['Dips', 'Brust', 8, 15],
   ['Klimmzüge', 'Rücken', 5, 10],
   ['Latzug', 'Rücken', 8, 12],
   ['Langhantelrudern', 'Rücken', 6, 10],
@@ -38,23 +38,28 @@ const DEFAULT_EXERCISES = [
   ['French Press', 'Arme', 8, 12],
   ['Crunches am Kabel', 'Core', 10, 15],
   ['Beinheben hängend', 'Core', 8, 15],
+  ['Ab-Wheel-Rollout', 'Core', 6, 12],
+  ['Pallof Press', 'Core', 10, 12],
 ];
 
 const DEFAULT_TEMPLATES = [
-  ['Push', ['Bankdrücken', 'Schrägbankdrücken (KH)', 'Schulterdrücken', 'Seitheben', 'Trizepsdrücken am Kabel']],
-  ['Pull', ['Klimmzüge', 'Langhantelrudern', 'Latzug', 'Face Pulls', 'Bizepscurls']],
-  ['Beine', ['Kniebeuge', 'Rumänisches Kreuzheben', 'Beinpresse', 'Beinbeuger', 'Wadenheben']],
+  ['Brust', ['Schrägbankdrücken 30°', 'Bankdrücken', 'Kabel-Flys', 'Dips']],
+  ['Bauch/Core', ['Beinheben hängend', 'Crunches am Kabel', 'Ab-Wheel-Rollout', 'Pallof Press']],
 ];
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const newExercise = ([name, group, repMin, repMax]) => ({ id: uid(), name, group, repMin, repMax });
+const buildTemplates = exercises => {
+  const idOf = name => exercises.find(e => e.name === name && !e.archived).id;
+  return DEFAULT_TEMPLATES.map(([name, list]) => ({ id: uid(), name, exerciseIds: list.map(idOf) }));
+};
 
 function defaultData() {
-  const exercises = DEFAULT_EXERCISES.map(([name, group, repMin, repMax]) => ({ id: uid(), name, group, repMin, repMax }));
-  const idOf = name => exercises.find(e => e.name === name).id;
+  const exercises = DEFAULT_EXERCISES.map(newExercise);
   return {
-    version: 1,
+    version: 2,
     exercises,
-    templates: DEFAULT_TEMPLATES.map(([name, list]) => ({ id: uid(), name, exerciseIds: list.map(idOf) })),
+    templates: buildTemplates(exercises),
     workouts: [],
     days: {},
     settings: { ...DEFAULT_SETTINGS },
@@ -62,13 +67,32 @@ function defaultData() {
   };
 }
 
+// v1 → v2: Brust-Split statt Push/Pull/Beine. Umbenannte Übungen behalten ihre ID und damit den Verlauf.
+const RENAMED_V2 = { 'Schrägbankdrücken (KH)': 'Schrägbankdrücken 30°', 'Butterfly': 'Kabel-Flys' };
+function migrate() {
+  if (db.version >= 2) return;
+  for (const ex of db.exercises) {
+    if (ex.archived) continue;
+    const name = RENAMED_V2[ex.name] || ex.name;
+    const def = DEFAULT_EXERCISES.find(d => d[0] === name && DEFAULT_TEMPLATES.some(t => t[1].includes(name)));
+    if (def) Object.assign(ex, { name, group: def[1], repMin: def[2], repMax: def[3] });
+  }
+  for (const def of DEFAULT_EXERCISES) {
+    if (!db.exercises.some(e => e.name === def[0] && !e.archived)) db.exercises.push(newExercise(def));
+  }
+  db.templates = buildTemplates(db.exercises);
+  db.version = 2;
+}
+
 let db;
 function load() {
   try { db = JSON.parse(localStorage.getItem(STORE_KEY)); } catch { db = null; }
-  if (!db || !Array.isArray(db.workouts)) { db = defaultData(); save(); }
+  if (!db || !Array.isArray(db.workouts)) db = defaultData();
   db.settings = { ...DEFAULT_SETTINGS, ...db.settings };
   db.days ||= {};
   db.templates ||= [];
+  migrate();
+  save();
 }
 function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); }
@@ -863,6 +887,7 @@ function importData(_, el) {
     db.settings = { ...DEFAULT_SETTINGS, ...d.settings };
     db.days ||= {};
     db.templates ||= [];
+    migrate();
     ui.editId = null;
     save();
     render();
