@@ -1,6 +1,6 @@
 // Offline-Cache: App startet sofort aus dem Cache, Updates werden im Hintergrund geladen
 // und sind beim nächsten Start aktiv.
-const CACHE = 'wt-v1';
+const CACHE = 'wt-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,8 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+  // 'reload': am HTTP-Cache vorbei, sonst landen bis zu 10 min alte Dateien im neuen Cache
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))));
   self.skipWaiting();
 });
 
@@ -30,7 +31,8 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(caches.open(CACHE).then(async cache => {
     const cached = await cache.match(req, { ignoreSearch: true });
-    const network = fetch(req)
+    // 'no-cache': beim Server nachfragen (GitHub Pages setzt max-age=600), dank ETag meist nur 304
+    const network = fetch(req, { cache: 'no-cache' })
       .then(res => { if (res.ok) cache.put(req, res.clone()); return res; })
       .catch(() => null);
     e.waitUntil(network);
