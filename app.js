@@ -1,6 +1,6 @@
 'use strict';
 
-const VERSION = '1.1';
+const VERSION = '1.2';
 const STORE_KEY = 'wt-data-v1';
 const DAY = 86400000;
 const GROUPS = ['Brust', 'Rücken', 'Beine', 'Schultern', 'Arme', 'Core', 'Sonstige'];
@@ -21,6 +21,8 @@ const DEFAULT_EXERCISES = [
   ['Latzug', 'Rücken', 8, 12],
   ['Langhantelrudern', 'Rücken', 6, 10],
   ['Kabelrudern', 'Rücken', 8, 12],
+  ['Brustgestütztes Rudern', 'Rücken', 8, 12],
+  ['Kabel-Pullover', 'Rücken', 12, 15],
   ['Kreuzheben', 'Rücken', 3, 6],
   ['Kniebeuge', 'Beine', 5, 8],
   ['Beinpresse', 'Beine', 8, 12],
@@ -32,6 +34,7 @@ const DEFAULT_EXERCISES = [
   ['Schulterdrücken', 'Schultern', 6, 10],
   ['Seitheben', 'Schultern', 12, 20],
   ['Face Pulls', 'Schultern', 12, 20],
+  ['Reverse Flys', 'Schultern', 15, 20],
   ['Bizepscurls', 'Arme', 8, 12],
   ['Hammercurls', 'Arme', 8, 12],
   ['Trizepsdrücken am Kabel', 'Arme', 10, 15],
@@ -42,24 +45,27 @@ const DEFAULT_EXERCISES = [
   ['Pallof Press', 'Core', 10, 12],
 ];
 
+// [Name, Übungen, eingeführt mit Datenversion]
 const DEFAULT_TEMPLATES = [
-  ['Brust', ['Schrägbankdrücken 30°', 'Bankdrücken', 'Kabel-Flys', 'Dips']],
-  ['Bauch/Core', ['Beinheben hängend', 'Crunches am Kabel', 'Ab-Wheel-Rollout', 'Pallof Press']],
+  ['Brust', ['Schrägbankdrücken 30°', 'Bankdrücken', 'Kabel-Flys', 'Dips'], 2],
+  ['Rücken', ['Klimmzüge', 'Brustgestütztes Rudern', 'Latzug', 'Kabel-Pullover', 'Reverse Flys'], 3],
+  ['Bauch/Core', ['Beinheben hängend', 'Crunches am Kabel', 'Ab-Wheel-Rollout', 'Pallof Press'], 2],
 ];
+const DATA_VERSION = 3;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const newExercise = ([name, group, repMin, repMax]) => ({ id: uid(), name, group, repMin, repMax });
-const buildTemplates = exercises => {
-  const idOf = name => exercises.find(e => e.name === name && !e.archived).id;
-  return DEFAULT_TEMPLATES.map(([name, list]) => ({ id: uid(), name, exerciseIds: list.map(idOf) }));
+const newTemplate = (exercises, [name, list]) => {
+  const idOf = n => exercises.find(e => e.name === n && !e.archived).id;
+  return { id: uid(), name, exerciseIds: list.map(idOf) };
 };
 
 function defaultData() {
   const exercises = DEFAULT_EXERCISES.map(newExercise);
   return {
-    version: 2,
+    version: DATA_VERSION,
     exercises,
-    templates: buildTemplates(exercises),
+    templates: DEFAULT_TEMPLATES.map(t => newTemplate(exercises, t)),
     workouts: [],
     days: {},
     settings: { ...DEFAULT_SETTINGS },
@@ -67,21 +73,29 @@ function defaultData() {
   };
 }
 
-// v1 → v2: Brust-Split statt Push/Pull/Beine. Umbenannte Übungen behalten ihre ID und damit den Verlauf.
+// Neue Standard-Vorlagen in bestehende Daten übernehmen, vorhandene bleiben unangetastet.
+// Umbenannte Übungen behalten ihre ID und damit den Verlauf.
 const RENAMED_V2 = { 'Schrägbankdrücken (KH)': 'Schrägbankdrücken 30°', 'Butterfly': 'Kabel-Flys' };
 function migrate() {
-  if (db.version >= 2) return;
-  for (const ex of db.exercises) {
-    if (ex.archived) continue;
-    const name = RENAMED_V2[ex.name] || ex.name;
-    const def = DEFAULT_EXERCISES.find(d => d[0] === name && DEFAULT_TEMPLATES.some(t => t[1].includes(name)));
-    if (def) Object.assign(ex, { name, group: def[1], repMin: def[2], repMax: def[3] });
+  const v = db.version || 1;
+  if (v >= DATA_VERSION) return;
+  if (v < 2) {
+    // Eigener Split statt Push/Pull/Beine
+    db.exercises.forEach(ex => { if (!ex.archived && RENAMED_V2[ex.name]) ex.name = RENAMED_V2[ex.name]; });
+    db.templates = [];
   }
   for (const def of DEFAULT_EXERCISES) {
     if (!db.exercises.some(e => e.name === def[0] && !e.archived)) db.exercises.push(newExercise(def));
   }
-  db.templates = buildTemplates(db.exercises);
-  db.version = 2;
+  DEFAULT_TEMPLATES.forEach((t, i) => {
+    if (t[2] <= v) return;
+    for (const name of t[1]) {
+      const [, group, repMin, repMax] = DEFAULT_EXERCISES.find(d => d[0] === name);
+      Object.assign(db.exercises.find(e => e.name === name && !e.archived), { group, repMin, repMax });
+    }
+    db.templates.splice(Math.min(i, db.templates.length), 0, newTemplate(db.exercises, t));
+  });
+  db.version = DATA_VERSION;
 }
 
 let db;
